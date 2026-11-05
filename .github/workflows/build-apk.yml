@@ -1,0 +1,121 @@
+name: Build Titan Neon v27 APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Android APK (Chaquopy + full libs)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    env:
+      ANDROID_HOME: ${{ github.workspace }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Android commandline tools + SDK packages
+        run: |
+          set -e
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          cd /tmp
+          curl -fsSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/tmp/sdk-licenses.txt || true
+          sdkmanager --sdk_root="$ANDROID_HOME" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
+          echo "sdk.dir=$ANDROID_HOME" > "$GITHUB_WORKSPACE/local.properties"
+
+      - name: Verify Python sources
+        run: |
+          test -f app/src/main/python/android_main.py
+          test -f app/src/main/python/app/web/app.py
+          test -f app/src/main/python/app/config.py
+          ls -la app/src/main/python/app/
+          echo "Python package OK"
+
+      - name: Create simple launcher icons
+        run: |
+          python3 - << 'PY'
+          from pathlib import Path
+          try:
+              from PIL import Image
+          except ImportError:
+              import subprocess, sys
+              subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow", "-q"])
+              from PIL import Image
+          base = Path("app/src/main/res")
+          for dens, size in [("mdpi",48),("hdpi",72),("xhdpi",96),("xxhdpi",144),("xxxhdpi",192)]:
+              d = base / f"mipmap-{dens}"
+              d.mkdir(parents=True, exist_ok=True)
+              img = Image.new("RGBA", (size, size), (0, 240, 255, 255))
+              for y in range(size//4, size*3//4):
+                  for x in range(size//3, size*2//3):
+                      img.putpixel((x,y), (11,15,26,255))
+              for x in range(size//4, size*3//4):
+                  for y in range(size//5, size*2//5):
+                      img.putpixel((x,y), (11,15,26,255))
+              img.save(d / "ic_launcher.png")
+          print("icons ok")
+          PY
+
+      - name: Setup Gradle wrapper
+        run: |
+          curl -fsSL -o /tmp/gradle-8.7-bin.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          sudo unzip -qo /tmp/gradle-8.7-bin.zip -d /opt
+          /opt/gradle-8.7/bin/gradle wrapper --gradle-version 8.7
+          chmod +x gradlew
+
+      - name: Gradle assembleDebug
+        run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          ./gradlew assembleDebug --stacktrace --no-daemon
+
+      - name: Prepare APK file
+        if: success()
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/*.apk dist/Titan-Neon-v27.apk
+          ls -lah dist/
+
+      - name: Upload APK artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Titan-Neon-v27-APK
+          path: dist/Titan-Neon-v27.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.7.3-android
+          name: Titan Neon v2.7.3 PRISM + GEMINI APK
+          body: |
+            TITAN NEON v2.7 PRISM + GEMINI — self-contained Android APK.
+            - Full modular Flask engine (technicals, forecast, paper exchange, Gemini AI)
+            - All deps (numpy, pandas, flask, waitress) baked into APK
+            - Data locked to Internal Storage/VVV
+            - Grant All-files access when prompted
+          files: dist/Titan-Neon-v27.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
