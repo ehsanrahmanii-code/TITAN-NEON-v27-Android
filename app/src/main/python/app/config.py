@@ -43,9 +43,9 @@ def valid_symbol(sym: str) -> bool:
 DEFAULT_SYMBOLS = [to_symbol(c) for c in DEFAULT_COINS]
 MAX_WATCHLIST = 40
 TIMEFRAMES = ["15m", "1h", "4h", "1d"]
-TF_PRIORITY = ["1h", "4h", "1d", "15m"]
+TF_PRIORITY = ["1h", "4h", "1d", "15m"]          # scan order (most useful first)
 TF_WEIGHT = {"15m": 0.15, "1h": 0.25, "4h": 0.30, "1d": 0.30}
-KLINE_LIMIT = 300
+KLINE_LIMIT = 300                                  # EMA200 needs real warm-up
 CHART_KLINES = 300
 FORECAST_CANDLES = 32
 MC_PATHS = 600
@@ -53,8 +53,10 @@ MC_PATHS = 600
 SCAN_INTERVAL_SEC = int(os.getenv("TITAN_SCAN_SEC", "90"))
 CPU_WORKERS = int(os.getenv("TITAN_CPU_WORKERS", "6"))
 
+# Signal thresholds (slightly lower to capture more high-quality continuations without flooding WAIT→signal)
 SIDE_THRESHOLD = 34.0
 
+# Paper exchange
 STARTING_CAPITAL = 10_000.0
 DEFAULT_LEVERAGE = 10
 MAX_LEVERAGE = 50
@@ -63,13 +65,14 @@ FEE_MAKER = 0.0002
 SLIPPAGE = 0.0002
 MAX_OPEN_POSITIONS = 12
 RISK_PER_TRADE_PCT = 1.0
-MAX_MARGIN_PCT_PER_POS = 20.0
-MAX_TOTAL_MARGIN_PCT = 60.0
+MAX_MARGIN_PCT_PER_POS = 20.0     # of equity
+MAX_TOTAL_MARGIN_PCT = 60.0       # of equity
 DAILY_LOSS_LIMIT_PCT = 8.0
-PARTIALS = (0.40, 0.35, 0.25)
+PARTIALS = (0.40, 0.35, 0.25)     # TP1 / TP2 / TP3 close fractions
 AUTO_MIN_CONF = 0.52
 AUTO_MIN_RR = 1.45
-AUTO_COOLDOWN_SEC = 2 * 3600
+AUTO_COOLDOWN_SEC = 2 * 3600      # after a losing auto trade on the same coin
 
+# AI
 GEMINI_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 AI_TIMEOUT_SEC = 18
