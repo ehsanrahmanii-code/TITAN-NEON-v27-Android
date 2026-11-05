@@ -2,10 +2,6 @@ name: Build Titan Neon v27 APK
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "TITAN_NEON_v27_PRISM_GEMINI.zip"
-      - ".github/workflows/build-apk.yml"
 
 permissions:
   contents: write
@@ -33,14 +29,13 @@ jobs:
           mkdir -p /tmp/titan_src
           unzip -oq "$ZIP" -d /tmp/titan_src
 
-          # Find UUU root (contains app/)
           ROOT=""
           if [ -d /tmp/titan_src/UUU/app ]; then
             ROOT=/tmp/titan_src/UUU
           elif [ -d /tmp/titan_src/app ]; then
             ROOT=/tmp/titan_src
           else
-            ROOT=$(find /tmp/titan_src -type d -name app -path '*/app' | head -1 | xargs -r dirname)
+            ROOT=$(find /tmp/titan_src -type d -name app | head -1 | xargs -r dirname)
           fi
           test -n "$ROOT"
           test -d "$ROOT/app"
@@ -50,62 +45,48 @@ jobs:
           DEST="app/src/main/python"
           mkdir -p "$DEST"
 
-          # Keep android_main.py if present, replace everything else from ZIP
-          KEEP_MAIN=""
           if [ -f "$DEST/android_main.py" ]; then
             cp -f "$DEST/android_main.py" /tmp/android_main.py.bak
-            KEEP_MAIN=1
           fi
 
-          # Copy full modular tree
           rm -rf "$DEST/app" "$DEST/secret" "$DEST/run.py" "$DEST/requirements.txt" || true
           cp -a "$ROOT/app" "$DEST/"
           [ -d "$ROOT/secret" ] && cp -a "$ROOT/secret" "$DEST/" || mkdir -p "$DEST/secret"
           [ -f "$ROOT/run.py" ] && cp -f "$ROOT/run.py" "$DEST/"
           [ -f "$ROOT/requirements.txt" ] && cp -f "$ROOT/requirements.txt" "$DEST/"
 
-          if [ -n "$KEEP_MAIN" ]; then
+          if [ -f /tmp/android_main.py.bak ]; then
             cp -f /tmp/android_main.py.bak "$DEST/android_main.py"
           fi
 
-          # Force VVV data folder + android-friendly host/port in config
           python3 << 'PY'
           from pathlib import Path
-          import re
           cfg = Path("app/src/main/python/app/config.py")
           if cfg.is_file():
               t = cfg.read_text(encoding="utf-8", errors="replace")
-              t2 = t
-              # Prefer env TITAN_DATA over hardcoded paths
-              if "TITAN_DATA" not in t:
-                  t2 = "import os\nfrom pathlib import Path\n" + t2
-              # Ensure DATA_DIR can be overridden
-              if "DATA_DIR" in t2 and "environ" not in t2.split("DATA_DIR")[0][-200:]:
-                  t2 = re.sub(
-                      r"DATA_DIR\s*=\s*[^
-]+",
-                      'DATA_DIR = Path(os.environ.get("TITAN_DATA") or "VVV")',
-                      t2,
-                      count=1,
-                  )
-              t2 = t2.replace('HOST = "0.0.0.0"', 'HOST = "127.0.0.1"')
-              t2 = t2.replace("HOST = '0.0.0.0'", "HOST = '127.0.0.1'")
-              if t2 != t:
-                  cfg.write_text(t2, encoding="utf-8")
-                  print("patched config.py")
-              else:
-                  print("config.py unchanged")
-          # Ensure static/templates present
+              lines = t.splitlines(keepends=True)
+              out = []
+              if "import os" not in t:
+                  out.append("import os\n")
+              if "from pathlib import Path" not in t and "import pathlib" not in t:
+                  out.append("from pathlib import Path\n")
+              for line in lines:
+                  if line.strip().startswith("DATA_DIR"):
+                      out.append('DATA_DIR = Path(os.environ.get("TITAN_DATA") or "VVV")\n')
+                  elif 'HOST = "0.0.0.0"' in line or "HOST = '0.0.0.0'" in line:
+                      out.append('HOST = "127.0.0.1"\n')
+                  else:
+                      out.append(line)
+              cfg.write_text("".join(out), encoding="utf-8")
+              print("patched config.py")
           st = Path("app/src/main/python/app/web/static")
-          tpl = Path("app/src/main/python/app/web/templates")
-          print("static exists", st.is_dir(), "files", len(list(st.rglob('*'))) if st.is_dir() else 0)
-          print("templates exists", tpl.is_dir())
-          print("app.py exists", Path("app/src/main/python/app/web/app.py").is_file())
-          print("views.js exists", (st / "js/views.js").is_file() if st.is_dir() else False)
-          print("neon.css exists", (st / "css/neon.css").is_file() if st.is_dir() else False)
+          print("static", st.is_dir(), "nfiles", len(list(st.rglob('*'))) if st.is_dir() else 0)
+          print("app.py", Path("app/src/main/python/app/web/app.py").is_file())
+          print("views.js", (st / "js/views.js").is_file() if st.is_dir() else False)
+          print("neon.css", (st / "css/neon.css").is_file() if st.is_dir() else False)
           PY
 
-          echo "=== final python tree (top) ==="
+          echo "=== python tree ==="
           find "$DEST" -type f | sort | head -80
           test -f "$DEST/android_main.py"
           test -f "$DEST/app/web/app.py"
@@ -207,18 +188,11 @@ jobs:
           tag_name: v2.7.3-FULL-PRISM
           name: Titan Neon v2.7.3 FULL PRISM APK
           body: |
-            ## TITAN NEON v2.7 PRISM + GEMINI — APK کامل
-
+            TITAN NEON v2.7 PRISM + GEMINI — APK کامل
             - سورس کامل ماژولار داخل APK
             - UI نئون + همه تب‌ها و نمودارها
             - داده در Internal Storage/VVV
-            - همه کتابخانه‌ها داخل APK (بدون اینترنت برای اجرا)
-
-            ### نصب
-            1. نسخه قبلی را Uninstall کنید
-            2. این APK را نصب کنید
-            3. مجوز All files را بدهید
-            4. ۱–۲ دقیقه صبر کنید تا موتور بالا بیاید
+            نصب: Uninstall قبلی، نصب این APK، مجوز All files، ۱–۲ دقیقه صبر.
           files: dist/Titan-Neon-v27-FULL.apk
           make_latest: true
         env:
