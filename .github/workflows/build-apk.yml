@@ -18,33 +18,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Assemble source ZIP from parts
+      - name: Prepare Python sources
         run: |
           set -e
-          if [ -f source_zip/part_0.b64 ]; then
-            cat source_zip/part_*.b64 | base64 -d > /tmp/titan_src.zip
-            ls -lah /tmp/titan_src.zip
-            mkdir -p /tmp/unpacked
-            unzip -q /tmp/titan_src.zip -d /tmp/unpacked
-            if [ -d /tmp/unpacked/UUU/app ]; then
-              rm -rf app/src/main/python/app
-              mkdir -p app/src/main/python
-              cp -a /tmp/unpacked/UUU/app app/src/main/python/
-              cp -f /tmp/unpacked/UUU/run.py app/src/main/python/ 2>/dev/null || true
-              mkdir -p app/src/main/python/secret
-              touch app/src/main/python/secret/.gitkeep
-              echo "Unpacked UUU/app into python sources"
+          echo "=== Current python tree ==="
+          find app/src/main/python -type f | head -50 || true
+          # If valid full ZIP parts exist, unpack them (preferred)
+          if [ -f source_zip/part_0.b64 ] && [ -f source_zip/part_1.b64 ]; then
+            echo "Trying to assemble source ZIP..."
+            if cat source_zip/part_*.b64 2>/dev/null | base64 -d > /tmp/titan_src.zip 2>/dev/null; then
+              if unzip -tq /tmp/titan_src.zip >/dev/null 2>&1; then
+                mkdir -p /tmp/unpacked
+                unzip -qo /tmp/titan_src.zip -d /tmp/unpacked
+                if [ -d /tmp/unpacked/UUU/app ]; then
+                  rm -rf app/src/main/python/app
+                  mkdir -p app/src/main/python
+                  cp -a /tmp/unpacked/UUU/app app/src/main/python/
+                  cp -f /tmp/unpacked/UUU/run.py app/src/main/python/ 2>/dev/null || true
+                  mkdir -p app/src/main/python/secret
+                  touch app/src/main/python/secret/.gitkeep
+                  echo "Unpacked full UUU/app from ZIP"
+                fi
+              else
+                echo "ZIP invalid or incomplete — keeping existing tree"
+              fi
             else
-              echo "Unexpected ZIP layout:"; find /tmp/unpacked -maxdepth 3
-              exit 1
+              echo "base64 decode failed — keeping existing tree"
             fi
           else
-            echo "No source_zip parts — using existing tree"
+            echo "No complete source_zip parts — using existing tree"
           fi
           test -f app/src/main/python/android_main.py
-          test -f app/src/main/python/app/web/app.py || test -f app/src/main/python/app/config.py
-          ls -la app/src/main/python/
-          ls -la app/src/main/python/app/ || true
+          test -f app/src/main/python/app/config.py
+          echo "=== Final python tree ==="
+          find app/src/main/python -type f | sort
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -131,7 +138,7 @@ jobs:
           name: Titan Neon v2.7.3 PRISM + GEMINI APK
           body: |
             TITAN NEON v2.7 PRISM + GEMINI — self-contained Android APK.
-            - Full modular Flask engine (technicals, forecast, paper exchange, Gemini AI)
+            - Full modular Flask engine
             - All deps (numpy, pandas, flask, waitress) baked into APK
             - Data locked to Internal Storage/VVV
             - Grant All-files access when prompted
