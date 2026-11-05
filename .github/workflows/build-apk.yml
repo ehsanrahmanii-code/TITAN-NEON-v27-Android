@@ -2,13 +2,17 @@ name: Build Titan Neon v27 APK
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "TITAN_NEON_v27_PRISM_GEMINI.zip"
+      - ".github/workflows/build-apk.yml"
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build Android APK (Chaquopy + full libs)
+    name: Build Android APK (full PRISM source)
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
@@ -18,40 +22,96 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Assemble full source from parts
+      - name: Unpack full TITAN NEON source from ZIP
         run: |
           set -e
-          if [ -f source_parts/manifest.json ]; then
-            python3 - << 'PY'
-          import json, pathlib
-          from collections import defaultdict
-          man = json.loads(pathlib.Path("source_parts/manifest.json").read_text())
-          groups = defaultdict(list)
-          for m in man:
-              groups[m["target"]].append(m)
-          for target, items in groups.items():
-              items.sort(key=lambda x: x["idx"])
-              chunks = []
-              for it in items:
-                  p = pathlib.Path("source_parts") / it["part"]
-                  if p.exists():
-                      chunks.append(p.read_text(encoding="utf-8"))
-                  else:
-                      print("MISSING", p)
-              if chunks:
-                  out = pathlib.Path(target)
-                  out.parent.mkdir(parents=True, exist_ok=True)
-                  out.write_text("".join(chunks), encoding="utf-8")
-                  print(f"assembled {target} ({sum(len(c) for c in chunks)} bytes)")
-          print("assemble done")
-          PY
+          ZIP="TITAN_NEON_v27_PRISM_GEMINI.zip"
+          test -f "$ZIP"
+          echo "ZIP size=$(wc -c < "$ZIP") bytes"
+
+          rm -rf /tmp/titan_src
+          mkdir -p /tmp/titan_src
+          unzip -oq "$ZIP" -d /tmp/titan_src
+
+          # Find UUU root (contains app/)
+          ROOT=""
+          if [ -d /tmp/titan_src/UUU/app ]; then
+            ROOT=/tmp/titan_src/UUU
+          elif [ -d /tmp/titan_src/app ]; then
+            ROOT=/tmp/titan_src
           else
-            echo "No source_parts/manifest.json — using existing tree"
+            ROOT=$(find /tmp/titan_src -type d -name app -path '*/app' | head -1 | xargs -r dirname)
           fi
-          echo "=== python tree ==="
-          find app/src/main/python -type f | sort | head -60
-          test -f app/src/main/python/android_main.py
-          test -f app/src/main/python/app/config.py
+          test -n "$ROOT"
+          test -d "$ROOT/app"
+          echo "ROOT=$ROOT"
+          ls -la "$ROOT"
+
+          DEST="app/src/main/python"
+          mkdir -p "$DEST"
+
+          # Keep android_main.py if present, replace everything else from ZIP
+          KEEP_MAIN=""
+          if [ -f "$DEST/android_main.py" ]; then
+            cp -f "$DEST/android_main.py" /tmp/android_main.py.bak
+            KEEP_MAIN=1
+          fi
+
+          # Copy full modular tree
+          rm -rf "$DEST/app" "$DEST/secret" "$DEST/run.py" "$DEST/requirements.txt" || true
+          cp -a "$ROOT/app" "$DEST/"
+          [ -d "$ROOT/secret" ] && cp -a "$ROOT/secret" "$DEST/" || mkdir -p "$DEST/secret"
+          [ -f "$ROOT/run.py" ] && cp -f "$ROOT/run.py" "$DEST/"
+          [ -f "$ROOT/requirements.txt" ] && cp -f "$ROOT/requirements.txt" "$DEST/"
+
+          if [ -n "$KEEP_MAIN" ]; then
+            cp -f /tmp/android_main.py.bak "$DEST/android_main.py"
+          fi
+
+          # Force VVV data folder + android-friendly host/port in config
+          python3 << 'PY'
+          from pathlib import Path
+          import re
+          cfg = Path("app/src/main/python/app/config.py")
+          if cfg.is_file():
+              t = cfg.read_text(encoding="utf-8", errors="replace")
+              t2 = t
+              # Prefer env TITAN_DATA over hardcoded paths
+              if "TITAN_DATA" not in t:
+                  t2 = "import os\nfrom pathlib import Path\n" + t2
+              # Ensure DATA_DIR can be overridden
+              if "DATA_DIR" in t2 and "environ" not in t2.split("DATA_DIR")[0][-200:]:
+                  t2 = re.sub(
+                      r"DATA_DIR\s*=\s*[^
+]+",
+                      'DATA_DIR = Path(os.environ.get("TITAN_DATA") or "VVV")',
+                      t2,
+                      count=1,
+                  )
+              t2 = t2.replace('HOST = "0.0.0.0"', 'HOST = "127.0.0.1"')
+              t2 = t2.replace("HOST = '0.0.0.0'", "HOST = '127.0.0.1'")
+              if t2 != t:
+                  cfg.write_text(t2, encoding="utf-8")
+                  print("patched config.py")
+              else:
+                  print("config.py unchanged")
+          # Ensure static/templates present
+          st = Path("app/src/main/python/app/web/static")
+          tpl = Path("app/src/main/python/app/web/templates")
+          print("static exists", st.is_dir(), "files", len(list(st.rglob('*'))) if st.is_dir() else 0)
+          print("templates exists", tpl.is_dir())
+          print("app.py exists", Path("app/src/main/python/app/web/app.py").is_file())
+          print("views.js exists", (st / "js/views.js").is_file() if st.is_dir() else False)
+          print("neon.css exists", (st / "css/neon.css").is_file() if st.is_dir() else False)
+          PY
+
+          echo "=== final python tree (top) ==="
+          find "$DEST" -type f | sort | head -80
+          test -f "$DEST/android_main.py"
+          test -f "$DEST/app/web/app.py"
+          test -f "$DEST/app/web/static/js/views.js"
+          test -f "$DEST/app/web/static/css/neon.css"
+          echo "SOURCE OK"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -59,25 +119,25 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install Android commandline tools + SDK packages
+      - name: Install Android SDK packages
         run: |
           set -e
           mkdir -p "$ANDROID_HOME/cmdline-tools"
-          cd /tmp
-          curl -fsSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+          curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
           mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/tmp/sdk-licenses.txt || true
-          sdkmanager --sdk_root="$ANDROID_HOME" --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
-          echo "sdk.dir=$ANDROID_HOME" > "$GITHUB_WORKSPACE/local.properties"
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          sdkmanager --sdk_root="$ANDROID_HOME" --install \
+            "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
 
-      - name: Create simple launcher icons
+      - name: Create launcher icons
         run: |
           python3 - << 'PY'
           from pathlib import Path
@@ -102,31 +162,41 @@ jobs:
           print("icons ok")
           PY
 
-      - name: Setup Gradle wrapper
+      - name: Gradle wrapper 8.7
         run: |
+          set -e
           curl -fsSL -o /tmp/gradle-8.7-bin.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
           sudo unzip -qo /tmp/gradle-8.7-bin.zip -d /opt
           /opt/gradle-8.7/bin/gradle wrapper --gradle-version 8.7
           chmod +x gradlew
+          ./gradlew --version
 
-      - name: Gradle assembleDebug
+      - name: Build Debug APK
+        env:
+          GRADLE_OPTS: -Xmx4g -Dorg.gradle.daemon=false
         run: |
+          set -o pipefail
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-          ./gradlew assembleDebug --stacktrace --no-daemon
+          ./gradlew clean assembleDebug --stacktrace --no-daemon 2>&1 | tee /tmp/gradle-build.log
+          tail -n 50 /tmp/gradle-build.log || true
 
-      - name: Prepare APK file
+      - name: Prepare dist APK
         if: success()
         run: |
+          set -e
           mkdir -p dist
-          cp app/build/outputs/apk/debug/*.apk dist/Titan-Neon-v27.apk
-          ls -lah dist/
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          test -s "$APK"
+          cp "$APK" dist/Titan-Neon-v27-FULL.apk
+          ls -lh dist/
+          sha256sum dist/Titan-Neon-v27-FULL.apk
 
       - name: Upload APK artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: Titan-Neon-v27-APK
-          path: dist/Titan-Neon-v27.apk
+          name: Titan-Neon-v27-FULL-APK
+          path: dist/Titan-Neon-v27-FULL.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -134,13 +204,31 @@ jobs:
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.7.3-full
+          tag_name: v2.7.3-FULL-PRISM
           name: Titan Neon v2.7.3 FULL PRISM APK
           body: |
-            TITAN NEON v2.7 PRISM + GEMINI — complete self-contained Android APK.
-            Full modular engine + neon UI + all deps inside APK.
-            Data locked to Internal Storage/VVV.
-          files: dist/Titan-Neon-v27.apk
+            ## TITAN NEON v2.7 PRISM + GEMINI — APK کامل
+
+            - سورس کامل ماژولار داخل APK
+            - UI نئون + همه تب‌ها و نمودارها
+            - داده در Internal Storage/VVV
+            - همه کتابخانه‌ها داخل APK (بدون اینترنت برای اجرا)
+
+            ### نصب
+            1. نسخه قبلی را Uninstall کنید
+            2. این APK را نصب کنید
+            3. مجوز All files را بدهید
+            4. ۱–۲ دقیقه صبر کنید تا موتور بالا بیاید
+          files: dist/Titan-Neon-v27-FULL.apk
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload gradle log on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: /tmp/gradle-build.log
+          if-no-files-found: ignore
