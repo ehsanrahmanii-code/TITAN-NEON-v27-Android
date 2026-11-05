@@ -18,40 +18,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare Python sources
+      - name: Assemble full source from parts
         run: |
           set -e
-          echo "=== Current python tree ==="
-          find app/src/main/python -type f | head -50 || true
-          # If valid full ZIP parts exist, unpack them (preferred)
-          if [ -f source_zip/part_0.b64 ] && [ -f source_zip/part_1.b64 ]; then
-            echo "Trying to assemble source ZIP..."
-            if cat source_zip/part_*.b64 2>/dev/null | base64 -d > /tmp/titan_src.zip 2>/dev/null; then
-              if unzip -tq /tmp/titan_src.zip >/dev/null 2>&1; then
-                mkdir -p /tmp/unpacked
-                unzip -qo /tmp/titan_src.zip -d /tmp/unpacked
-                if [ -d /tmp/unpacked/UUU/app ]; then
-                  rm -rf app/src/main/python/app
-                  mkdir -p app/src/main/python
-                  cp -a /tmp/unpacked/UUU/app app/src/main/python/
-                  cp -f /tmp/unpacked/UUU/run.py app/src/main/python/ 2>/dev/null || true
-                  mkdir -p app/src/main/python/secret
-                  touch app/src/main/python/secret/.gitkeep
-                  echo "Unpacked full UUU/app from ZIP"
-                fi
-              else
-                echo "ZIP invalid or incomplete — keeping existing tree"
-              fi
-            else
-              echo "base64 decode failed — keeping existing tree"
-            fi
+          if [ -f source_parts/manifest.json ]; then
+            python3 - << 'PY'
+          import json, pathlib
+          from collections import defaultdict
+          man = json.loads(pathlib.Path("source_parts/manifest.json").read_text())
+          groups = defaultdict(list)
+          for m in man:
+              groups[m["target"]].append(m)
+          for target, items in groups.items():
+              items.sort(key=lambda x: x["idx"])
+              chunks = []
+              for it in items:
+                  p = pathlib.Path("source_parts") / it["part"]
+                  if p.exists():
+                      chunks.append(p.read_text(encoding="utf-8"))
+                  else:
+                      print("MISSING", p)
+              if chunks:
+                  out = pathlib.Path(target)
+                  out.parent.mkdir(parents=True, exist_ok=True)
+                  out.write_text("".join(chunks), encoding="utf-8")
+                  print(f"assembled {target} ({sum(len(c) for c in chunks)} bytes)")
+          print("assemble done")
+          PY
           else
-            echo "No complete source_zip parts — using existing tree"
+            echo "No source_parts/manifest.json — using existing tree"
           fi
+          echo "=== python tree ==="
+          find app/src/main/python -type f | sort | head -60
           test -f app/src/main/python/android_main.py
           test -f app/src/main/python/app/config.py
-          echo "=== Final python tree ==="
-          find app/src/main/python -type f | sort
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -134,14 +134,12 @@ jobs:
         if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.7.3-android
-          name: Titan Neon v2.7.3 PRISM + GEMINI APK
+          tag_name: v2.7.3-full
+          name: Titan Neon v2.7.3 FULL PRISM APK
           body: |
-            TITAN NEON v2.7 PRISM + GEMINI — self-contained Android APK.
-            - Full modular Flask engine
-            - All deps (numpy, pandas, flask, waitress) baked into APK
-            - Data locked to Internal Storage/VVV
-            - Grant All-files access when prompted
+            TITAN NEON v2.7 PRISM + GEMINI — complete self-contained Android APK.
+            Full modular engine + neon UI + all deps inside APK.
+            Data locked to Internal Storage/VVV.
           files: dist/Titan-Neon-v27.apk
           make_latest: true
         env:
