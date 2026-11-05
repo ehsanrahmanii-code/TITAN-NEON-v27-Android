@@ -1,0 +1,5 @@
+flask>=3.0,<3.2
+waitress>=3.0,<4
+requests>=2.31,<3
+numpy>=1.24
+pandas>=2.0
